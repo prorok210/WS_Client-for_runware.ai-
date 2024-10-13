@@ -33,25 +33,25 @@ func (ws *WSClient) handleConnLoop() {
 			}
 			timer.Reset(CONNECTION_TIMEOUT)
 
-			if err := ws.socket.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT)); err != nil {
-				ws.ErrChan <- fmt.Errorf("set write deadline: %w", err)
-				continue
-			}
+			// if err := ws.socket.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT)); err != nil {
+			// 	ws.ErrChan <- fmt.Errorf("set write deadline: %w", err)
+			// 	continue
+			// }
 
 			if err := ws.send(req); err != nil {
 				ws.ErrChan <- fmt.Errorf("send error: %w", err)
 				return
 			}
 
-			if err := ws.socket.SetWriteDeadline(time.Time{}); err != nil {
-				ws.ErrChan <- fmt.Errorf("clear write deadline: %w", err)
-				continue
-			}
+			// if err := ws.socket.SetWriteDeadline(time.Time{}); err != nil {
+			// 	ws.ErrChan <- fmt.Errorf("clear write deadline: %w", err)
+			// 	continue
+			// }
 
-			if err := ws.socket.SetReadDeadline(time.Now().Add(READ_TIMEOUT)); err != nil {
-				ws.ErrChan <- fmt.Errorf("set read deadline: %w", err)
-				continue
-			}
+			// if err := ws.socket.SetReadDeadline(time.Now().Add(READ_TIMEOUT)); err != nil {
+			// 	ws.ErrChan <- fmt.Errorf("set read deadline: %w", err)
+			// 	continue
+			// }
 
 			resp, err := ws.receive()
 			if err != nil {
@@ -59,10 +59,10 @@ func (ws *WSClient) handleConnLoop() {
 				continue
 			}
 
-			if err := ws.socket.SetReadDeadline(time.Time{}); err != nil {
-				ws.ErrChan <- fmt.Errorf("clear read deadline: %w", err)
-				continue
-			}
+			// if err := ws.socket.SetReadDeadline(time.Time{}); err != nil {
+			// 	ws.ErrChan <- fmt.Errorf("clear read deadline: %w", err)
+			// 	continue
+			// }
 			ws.ReceiveMsgChan <- resp
 		case <-timer.C:
 			ws.ErrChan <- errors.New("Connection timeout")
@@ -196,18 +196,25 @@ func (ws *WSClient) authentication() error {
 }
 
 func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) ([]RespData, error) {
+	fmt.Println("sending...")
 	if ws.socket == nil || ws.SendMsgChan == nil {
+		fmt.Println("First msg")
 		if err := ws.Start(); err != nil {
+			go ws.Close()
 			return nil, fmt.Errorf("failed to start connection: %w", err)
 		}
 	}
+	fmt.Println(ws.socket != nil)
 
 	ws.SendMsgChan <- msg
+
+	timeout := time.NewTimer(READ_TIMEOUT + WRITE_TIMEOUT)
+	defer timeout.Stop()
 
 	select {
 	case resp := <-ws.ReceiveMsgChan:
 		return resp, nil
-	case <-time.After(READ_TIMEOUT + WRITE_TIMEOUT):
+	case <-timeout.C:
 		return nil, errors.New("timeout waiting for response")
 	}
 }

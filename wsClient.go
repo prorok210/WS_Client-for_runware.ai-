@@ -34,13 +34,12 @@ func CreateWsClient(apiKey string, userID uint) *WSClient {
 		apiKey:      apiKey,
 		socketMutex: sync.Mutex{},
 		reconn:      atomic.Bool{},
-		closeOnce:   sync.Once{},
 		closed:      atomic.Bool{},
 	}
 }
 
 func (ws *WSClient) Start() error {
-	fmt.Println("Starting")
+	fmt.Println("Starting...")
 	if ws.socket == nil {
 		if err := ws.connect(); err != nil {
 			return err
@@ -55,6 +54,11 @@ func (ws *WSClient) Start() error {
 }
 
 func (ws *WSClient) connect() error {
+	fmt.Println("Connection...")
+	defer fmt.Println("Connection done")
+
+	ws.closed.Store(false)
+
 	socket, _, err := websocket.DefaultDialer.Dial(ws.url, nil)
 	if err != nil {
 		return fmt.Errorf("dial error: %w", err)
@@ -63,6 +67,9 @@ func (ws *WSClient) connect() error {
 	ws.socket = socket
 
 	err = ws.authentication()
+	if err != nil {
+		return fmt.Errorf("Connect error %w", err)
+	}
 
 	log.Println("Auth:", string(ws.User.UUID))
 
@@ -110,33 +117,37 @@ func (ws *WSClient) reconnecting() error {
 
 func (ws *WSClient) Close() {
 	fmt.Println("Close")
+	if ws.closed.Load() {
+		fmt.Println("Connection already closed")
+		return
+	}
+	ws.closed.Store(true)
 	defer fmt.Println("close done")
-	ws.closeOnce.Do(func() {
-		ws.closed.Store(true)
 
-		ws.socketMutex.Lock()
-		defer ws.socketMutex.Unlock()
-		if ws.socket != nil {
-			ws.socket.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-				time.Now().Add(time.Second),
-			)
+	ws.socketMutex.Lock()
+	defer ws.socketMutex.Unlock()
+	if ws.socket != nil {
+		ws.socket.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
 
-			if err := ws.socket.Close(); err != nil {
-				log.Printf("Error closing WebSocket connection: %v", err)
-			}
-			ws.socket = nil
+		if err := ws.socket.Close(); err != nil {
+			log.Printf("Error closing WebSocket connection: %v", err)
 		}
+	}
 
-		if ws.Done != nil {
-			close(ws.Done)
-		}
-		ws.wg.Wait()
-		safeClose(ws.SendMsgChan)
-		safeClose(ws.ReceiveMsgChan)
-		safeClose(ws.ErrChan)
-	})
+	ws.socket = nil
+	fmt.Println(ws.socket == nil)
+
+	if ws.Done != nil {
+		close(ws.Done)
+	}
+	ws.wg.Wait()
+	safeClose(ws.SendMsgChan)
+	safeClose(ws.ReceiveMsgChan)
+	safeClose(ws.ErrChan)
 }
 
 func safeClose[T any](ch chan T) {

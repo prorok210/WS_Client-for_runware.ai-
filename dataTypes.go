@@ -21,6 +21,7 @@ type ReqMessage struct {
 	CFGScale       float64  `json:"CFGScale,omitempty"`
 	NumberResults  int      `json:"numberResults,omitempty"`
 	Scheduler      string   `json:"scheduler,omitempty"`
+	Seed           int      `json:"seed,omitempty"`
 	ApiKey         string   `json:"apiKey,omitempty"`
 }
 
@@ -61,7 +62,6 @@ type WSClient struct {
 	CloseChan      chan struct{}
 	wg             sync.WaitGroup
 	socketMutex    sync.Mutex
-	closeOnce      sync.Once
 	reconn         atomic.Bool
 	closed         atomic.Bool
 }

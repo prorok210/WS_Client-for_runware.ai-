@@ -37,20 +37,22 @@ func TestWSClientSendMsg(t *testing.T) {
 	go func() {
 		fmt.Println("Start testing")
 		for i, reqMsg := range data {
+			fmt.Println("Sending resp")
 			resp, err := wsClient.SendAndReceiveMsg(reqMsg)
 			if err != nil {
 				fmt.Println("err connectin", err)
 			}
 			fmt.Println(i, "Sent: ", reqMsg)
 			fmt.Println(i, "Response: ", resp)
-			if i == 10 {
+			if i == 10 || i == 20 || i == 30 || i == 40 {
 				go func() {
-					for i := 0; i < 61; i++ {
-						fmt.Println(i)
+					for j := 0; j < i/10*60; j++ {
+						fmt.Println(j)
 						time.Sleep(1 * time.Second)
 					}
 				}()
-				time.Sleep(61 * time.Second)
+				sleepDuration := time.Duration((i / 10) * 60)
+				time.Sleep(sleepDuration * time.Second)
 			}
 		}
 	}()
