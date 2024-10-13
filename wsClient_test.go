@@ -45,12 +45,12 @@ func TestWSClientSendMsg(t *testing.T) {
 			fmt.Println(i, "Response: ", resp)
 			if i == 10 {
 				go func() {
-					for i := 0; i < 120; i++ {
+					for i := 0; i < 61; i++ {
 						fmt.Println(i)
 						time.Sleep(1 * time.Second)
 					}
 				}()
-				time.Sleep(120 * time.Second)
+				time.Sleep(61 * time.Second)
 			}
 		}
 	}()

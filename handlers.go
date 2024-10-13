@@ -12,7 +12,11 @@ import (
 
 func (ws *WSClient) handleConnLoop() {
 	defer fmt.Println("handleConnLoop ended")
+	defer ws.wg.Done()
 	fmt.Println("handleConnLoop started")
+
+	timer := time.NewTimer(CONNECTION_TIMEOUT)
+	defer timer.Stop()
 	for {
 		if ws.reconn.Load() {
 			fmt.Println("Continue in handleLoop")
@@ -24,6 +28,11 @@ func (ws *WSClient) handleConnLoop() {
 			fmt.Println("Handle conn Channel done")
 			return
 		case req := <-ws.SendMsgChan:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(CONNECTION_TIMEOUT)
+
 			if err := ws.socket.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT)); err != nil {
 				ws.ErrChan <- fmt.Errorf("set write deadline: %w", err)
 				continue
@@ -55,13 +64,16 @@ func (ws *WSClient) handleConnLoop() {
 				continue
 			}
 			ws.ReceiveMsgChan <- resp
+		case <-timer.C:
+			ws.ErrChan <- errors.New("Connection timeout")
+			return
 		}
-
 	}
 }
 
 func (ws *WSClient) handleErrLoop() {
 	defer fmt.Println("handleErrLoop ended")
+	defer ws.wg.Done()
 	fmt.Println("handleErrLoop started")
 	for {
 		if ws.reconn.Load() {
@@ -70,16 +82,39 @@ func (ws *WSClient) handleErrLoop() {
 		select {
 		case err := <-ws.ErrChan:
 			fmt.Println(err)
-			if err.Error() == "websocket: close 1006 (abnormal closure): unexpected EOF" {
-				fmt.Println("Мы вошли в ошибку")
-				ws.reconnecting()
+
+			switch {
+			case websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure):
+				fmt.Println("Unexpected closure, attempting to reconnect")
+				if reconnErr := ws.reconnecting(); reconnErr != nil {
+					fmt.Println("Reconnection failed:", reconnErr)
+					go ws.Close()
+					return
+				}
+
+			case err.Error() == "Connection timeout":
+				go ws.Close()
 				return
-			}
-			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
-				ws.Close()
+
+			case errors.Is(err, net.ErrClosed):
+				fmt.Println("Connection already closed")
 				return
+			default:
+				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+					fmt.Println("Network timeout, attempting to reconnect")
+					if reconnErr := ws.reconnecting(); reconnErr != nil {
+						fmt.Println("Reconnection failed:", reconnErr)
+						go ws.Close()
+						return
+					}
+				} else {
+					fmt.Println("Unhandled error, closing connection")
+					go ws.Close()
+					return
+				}
 			}
-			ws.Close()
+		case <-ws.Done:
+			fmt.Println("Done signal received, exiting handleErrLoop")
 			return
 		}
 
@@ -172,7 +207,7 @@ func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) ([]RespData, error) {
 	select {
 	case resp := <-ws.ReceiveMsgChan:
 		return resp, nil
-	case <-time.After(READ_TIMEOUT):
+	case <-time.After(READ_TIMEOUT + WRITE_TIMEOUT):
 		return nil, errors.New("timeout waiting for response")
 	}
 }

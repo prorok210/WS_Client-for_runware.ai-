@@ -17,7 +17,7 @@ const (
 	URL                   = "wss://ws-api.runware.ai/v1"
 	SEND_CHAN_MAX_SIZE    = 128
 	RECEIVE_CHAN_MAX_SIZE = 128
-	TIMEOUT               = 15 * time.Second
+	CONNECTION_TIMEOUT    = 60 * time.Second
 	RECONNECTED_DELAY     = 1 * time.Second
 	MAX_RETRIES           = 3
 	WRITE_TIMEOUT         = 5 * time.Second
@@ -71,6 +71,7 @@ func (ws *WSClient) connect() error {
 	ws.ErrChan = make(chan error)
 	ws.Done = make(chan struct{})
 
+	ws.wg.Add(2)
 	go ws.handleConnLoop()
 	go ws.handleErrLoop()
 
@@ -85,7 +86,7 @@ func (ws *WSClient) reconnecting() error {
 	}
 	defer ws.reconn.Store(false)
 
-	ws.Close()
+	go ws.Close()
 
 	retryCount := 0
 	backoffDuration := RECONNECTED_DELAY
@@ -131,6 +132,7 @@ func (ws *WSClient) Close() {
 		if ws.Done != nil {
 			close(ws.Done)
 		}
+		ws.wg.Wait()
 		safeClose(ws.SendMsgChan)
 		safeClose(ws.ReceiveMsgChan)
 		safeClose(ws.ErrChan)
