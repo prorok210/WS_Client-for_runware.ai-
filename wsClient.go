@@ -1,7 +1,6 @@
 package Pic_Generating
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -20,11 +19,9 @@ const (
 	RECEIVE_CHAN_MAX_SIZE = 128
 	TIMEOUT               = 15 * time.Second
 	RECONNECTED_DELAY     = 1 * time.Second
-	RECONNECT_TIMEOUT     = 10 * time.Second
-	RECONNECT_MAX_TRIES   = 3
 	MAX_RETRIES           = 3
-	WRITE_TIMEOUT         = 10 * time.Second
-	READ_TIMEOUT          = 30 * time.Second
+	WRITE_TIMEOUT         = 5 * time.Second
+	READ_TIMEOUT          = 15 * time.Second
 )
 
 func CreateWsClient(apiKey string, userID uint) *WSClient {
@@ -43,11 +40,8 @@ func CreateWsClient(apiKey string, userID uint) *WSClient {
 }
 
 func (ws *WSClient) Start() error {
+	fmt.Println("Starting")
 	if ws.socket == nil {
-		ws.SendMsgChan = make(chan ReqMessage, SEND_CHAN_MAX_SIZE)
-		ws.ReceiveMsgChan = make(chan []RespData, RECEIVE_CHAN_MAX_SIZE)
-		ws.ErrChan = make(chan error)
-		ws.Done = make(chan struct{})
 		if err := ws.connect(); err != nil {
 			return err
 		}
@@ -56,15 +50,11 @@ func (ws *WSClient) Start() error {
 			return err
 		}
 	}
-	go ws.handleConnLoop()
+
 	return nil
 }
 
 func (ws *WSClient) connect() error {
-	if ws.socket != nil {
-		return errors.New("socket already exists")
-	}
-
 	socket, _, err := websocket.DefaultDialer.Dial(ws.url, nil)
 	if err != nil {
 		return fmt.Errorf("dial error: %w", err)
@@ -72,82 +62,54 @@ func (ws *WSClient) connect() error {
 
 	ws.socket = socket
 
-	authCredentials := ReqMessage{
-		TaskType: "authentication",
-		ApiKey:   ws.apiKey,
-	}
-	formattedReq := []ReqMessage{authCredentials}
+	err = ws.authentication()
 
-	jsonStr, err := json.Marshal(formattedReq)
-	if err != nil {
-		return fmt.Errorf("failed to marshal auth request: %w", err)
-	}
-	fmt.Println(string(jsonStr))
+	log.Println("Auth:", string(ws.User.UUID))
 
-	err = ws.socket.WriteMessage(websocket.TextMessage, jsonStr)
-	if err != nil {
-		return fmt.Errorf("failed to send auth request: %w", err)
-	}
-	_, resp, err := ws.socket.ReadMessage()
-	if err != nil {
-		return fmt.Errorf("failed to read auth response: %w", err)
-	}
-	response := new(RespMessage)
-	if err := json.Unmarshal(resp, response); err != nil {
-		return fmt.Errorf("failed to unmarshal auth response: %w", err)
-	}
-	if len(response.Err) > 0 {
-		return fmt.Errorf("error response: %s", response.Err[0].Message)
-	}
-	if len(response.Data) == 0 {
-		return errors.New("empty data in auth response")
-	}
-	ws.User.UUID = response.Data[0].ConnectionSessionUUID
+	ws.SendMsgChan = make(chan ReqMessage, SEND_CHAN_MAX_SIZE)
+	ws.ReceiveMsgChan = make(chan []RespData, RECEIVE_CHAN_MAX_SIZE)
+	ws.ErrChan = make(chan error)
+	ws.Done = make(chan struct{})
 
-	log.Println("Auth response:", string(resp))
+	go ws.handleConnLoop()
+	go ws.handleErrLoop()
 
 	return nil
 }
 
 func (ws *WSClient) reconnecting() error {
+	fmt.Println("reconnecting...")
+	defer fmt.Println("reconnecting done")
 	if !ws.reconn.CompareAndSwap(false, true) {
 		return errors.New("reconnection already in progress")
 	}
-	err := ws.Close()
-	if err != nil {
-		return fmt.Errorf("failed to close connection: %w", err)
-	}
 	defer ws.reconn.Store(false)
-	defer log.Println("Reconnection finished")
+
+	ws.Close()
 
 	retryCount := 0
 	backoffDuration := RECONNECTED_DELAY
 
 	for {
-		select {
-		case <-time.After(RECONNECT_TIMEOUT):
-			return errors.New("reconnection timeout")
-		default:
-			if retryCount >= MAX_RETRIES {
-				return errors.New("max retries reached")
-			}
-			err := ws.connect()
-			if err == nil {
-				return nil
-			}
-
-			time.Sleep(backoffDuration)
-			retryCount++
-			backoffDuration *= 2
-			log.Printf("Reconnection attempt %d failed: %v. Next attempt in %v", retryCount, err, backoffDuration)
-
+		if retryCount >= MAX_RETRIES {
+			return errors.New("max retries reached")
 		}
-
+		err := ws.connect()
+		if err == nil {
+			fmt.Println("recon successful")
+			return nil
+		}
+		fmt.Println("Ошибка в reconnecting", err)
+		time.Sleep(backoffDuration)
+		retryCount++
+		backoffDuration *= 2
+		log.Printf("Reconnection attempt %d failed: %v. Next attempt in %v", retryCount, err, backoffDuration)
 	}
 }
 
-func (ws *WSClient) Close() error {
-	var closeErr error = nil
+func (ws *WSClient) Close() {
+	fmt.Println("Close")
+	defer fmt.Println("close done")
 	ws.closeOnce.Do(func() {
 		ws.closed.Store(true)
 
@@ -162,20 +124,17 @@ func (ws *WSClient) Close() error {
 
 			if err := ws.socket.Close(); err != nil {
 				log.Printf("Error closing WebSocket connection: %v", err)
-				closeErr = err
 			}
+			ws.socket = nil
 		}
 
 		if ws.Done != nil {
 			close(ws.Done)
 		}
-
 		safeClose(ws.SendMsgChan)
 		safeClose(ws.ReceiveMsgChan)
 		safeClose(ws.ErrChan)
-
 	})
-	return closeErr
 }
 
 func safeClose[T any](ch chan T) {
@@ -183,6 +142,7 @@ func safeClose[T any](ch chan T) {
 		if r := recover(); r != nil {
 			log.Printf("Recovered from panic while closing channel: %v", r)
 		}
+		fmt.Println("Chanel closed", ch)
 	}()
 
 	select {
@@ -193,6 +153,7 @@ func safeClose[T any](ch chan T) {
 	default:
 		close(ch)
 	}
+
 }
 
 func GenerateUUID() string {
