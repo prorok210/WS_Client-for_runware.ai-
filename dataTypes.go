@@ -55,9 +55,9 @@ type WSClient struct {
 	url            string
 	apiKey         string
 	socket         *websocket.Conn
-	SendMsgChan    chan ReqMessage
-	ReceiveMsgChan chan RespMessage
-	ErrChan        chan error
+	sendMsgChan    chan ReqMessage
+	receiveMsgChan chan RespMessage
+	errChan        chan error
 	Done           chan struct{}
 	CloseChan      chan struct{}
 	wg             sync.WaitGroup

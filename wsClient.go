@@ -64,9 +64,9 @@ func (ws *WSClient) connect() error {
 		return fmt.Errorf("Connect error %w", err)
 	}
 
-	ws.SendMsgChan = make(chan ReqMessage, SEND_CHAN_MAX_SIZE)
-	ws.ReceiveMsgChan = make(chan RespMessage, RECEIVE_CHAN_MAX_SIZE)
-	ws.ErrChan = make(chan error)
+	ws.sendMsgChan = make(chan ReqMessage, SEND_CHAN_MAX_SIZE)
+	ws.receiveMsgChan = make(chan RespMessage, RECEIVE_CHAN_MAX_SIZE)
+	ws.errChan = make(chan error)
 	ws.Done = make(chan struct{})
 
 	ws.wg.Add(2)
@@ -122,9 +122,9 @@ func (ws *WSClient) Close() {
 	close(ws.Done)
 
 	ws.wg.Wait()
-	safeClose(ws.SendMsgChan)
-	safeClose(ws.ReceiveMsgChan)
-	safeClose(ws.ErrChan)
+	safeClose(ws.sendMsgChan)
+	safeClose(ws.receiveMsgChan)
+	safeClose(ws.errChan)
 }
 
 func safeClose[T any](ch chan T) {
