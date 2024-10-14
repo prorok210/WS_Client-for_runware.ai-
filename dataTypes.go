@@ -56,12 +56,16 @@ type WSClient struct {
 	apiKey         string
 	socket         *websocket.Conn
 	SendMsgChan    chan ReqMessage
-	ReceiveMsgChan chan []RespData
+	ReceiveMsgChan chan RespMessage
 	ErrChan        chan error
 	Done           chan struct{}
 	CloseChan      chan struct{}
 	wg             sync.WaitGroup
 	socketMutex    sync.Mutex
 	reconn         atomic.Bool
-	closed         atomic.Bool
 }
+
+var (
+	errResp   = RespMessage{Data: []RespData{}, Err: []RespError{{Code: "500", Message: "Internal server error"}}}
+	emptyResp = RespMessage{Data: []RespData{}, Err: []RespError{}}
+)

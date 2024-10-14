@@ -20,8 +20,8 @@ const (
 	CONNECTION_TIMEOUT    = 60 * time.Second
 	RECONNECTED_DELAY     = 1 * time.Second
 	MAX_RETRIES           = 3
-	WRITE_TIMEOUT         = 5 * time.Second
-	READ_TIMEOUT          = 15 * time.Second
+	WRITE_TIMEOUT         = 10 * time.Second
+	READ_TIMEOUT          = 40 * time.Second
 )
 
 func CreateWsClient(apiKey string, userID uint) *WSClient {
@@ -34,12 +34,10 @@ func CreateWsClient(apiKey string, userID uint) *WSClient {
 		apiKey:      apiKey,
 		socketMutex: sync.Mutex{},
 		reconn:      atomic.Bool{},
-		closed:      atomic.Bool{},
 	}
 }
 
 func (ws *WSClient) Start() error {
-	fmt.Println("Starting...")
 	if ws.socket == nil {
 		if err := ws.connect(); err != nil {
 			return err
@@ -54,11 +52,6 @@ func (ws *WSClient) Start() error {
 }
 
 func (ws *WSClient) connect() error {
-	fmt.Println("Connection...")
-	defer fmt.Println("Connection done")
-
-	ws.closed.Store(false)
-
 	socket, _, err := websocket.DefaultDialer.Dial(ws.url, nil)
 	if err != nil {
 		return fmt.Errorf("dial error: %w", err)
@@ -71,10 +64,8 @@ func (ws *WSClient) connect() error {
 		return fmt.Errorf("Connect error %w", err)
 	}
 
-	log.Println("Auth:", string(ws.User.UUID))
-
 	ws.SendMsgChan = make(chan ReqMessage, SEND_CHAN_MAX_SIZE)
-	ws.ReceiveMsgChan = make(chan []RespData, RECEIVE_CHAN_MAX_SIZE)
+	ws.ReceiveMsgChan = make(chan RespMessage, RECEIVE_CHAN_MAX_SIZE)
 	ws.ErrChan = make(chan error)
 	ws.Done = make(chan struct{})
 
@@ -86,12 +77,9 @@ func (ws *WSClient) connect() error {
 }
 
 func (ws *WSClient) reconnecting() error {
-	fmt.Println("reconnecting...")
-	defer fmt.Println("reconnecting done")
 	if !ws.reconn.CompareAndSwap(false, true) {
 		return errors.New("reconnection already in progress")
 	}
-	defer ws.reconn.Store(false)
 
 	go ws.Close()
 
@@ -104,10 +92,9 @@ func (ws *WSClient) reconnecting() error {
 		}
 		err := ws.connect()
 		if err == nil {
-			fmt.Println("recon successful")
+			log.Println("reconnect successful")
 			return nil
 		}
-		fmt.Println("Ошибка в reconnecting", err)
 		time.Sleep(backoffDuration)
 		retryCount++
 		backoffDuration *= 2
@@ -116,14 +103,6 @@ func (ws *WSClient) reconnecting() error {
 }
 
 func (ws *WSClient) Close() {
-	fmt.Println("Close")
-	if ws.closed.Load() {
-		fmt.Println("Connection already closed")
-		return
-	}
-	ws.closed.Store(true)
-	defer fmt.Println("close done")
-
 	ws.socketMutex.Lock()
 	defer ws.socketMutex.Unlock()
 	if ws.socket != nil {
@@ -139,11 +118,9 @@ func (ws *WSClient) Close() {
 	}
 
 	ws.socket = nil
-	fmt.Println(ws.socket == nil)
 
-	if ws.Done != nil {
-		close(ws.Done)
-	}
+	close(ws.Done)
+
 	ws.wg.Wait()
 	safeClose(ws.SendMsgChan)
 	safeClose(ws.ReceiveMsgChan)
@@ -155,7 +132,6 @@ func safeClose[T any](ch chan T) {
 		if r := recover(); r != nil {
 			log.Printf("Recovered from panic while closing channel: %v", r)
 		}
-		fmt.Println("Chanel closed", ch)
 	}()
 
 	select {

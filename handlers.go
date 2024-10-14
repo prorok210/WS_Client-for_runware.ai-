@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -11,21 +12,17 @@ import (
 )
 
 func (ws *WSClient) handleConnLoop() {
-	defer fmt.Println("handleConnLoop ended")
 	defer ws.wg.Done()
-	fmt.Println("handleConnLoop started")
 
 	timer := time.NewTimer(CONNECTION_TIMEOUT)
 	defer timer.Stop()
 	for {
 		if ws.reconn.Load() {
-			fmt.Println("Continue in handleLoop")
 			time.Sleep(time.Second)
 			continue
 		}
 		select {
 		case <-ws.Done:
-			fmt.Println("Handle conn Channel done")
 			return
 		case req := <-ws.SendMsgChan:
 			if !timer.Stop() {
@@ -33,25 +30,25 @@ func (ws *WSClient) handleConnLoop() {
 			}
 			timer.Reset(CONNECTION_TIMEOUT)
 
-			// if err := ws.socket.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT)); err != nil {
-			// 	ws.ErrChan <- fmt.Errorf("set write deadline: %w", err)
-			// 	continue
-			// }
+			if err := ws.socket.SetWriteDeadline(time.Now().Add(WRITE_TIMEOUT)); err != nil {
+				ws.ErrChan <- fmt.Errorf("set write deadline: %w", err)
+				continue
+			}
 
 			if err := ws.send(req); err != nil {
 				ws.ErrChan <- fmt.Errorf("send error: %w", err)
 				return
 			}
 
-			// if err := ws.socket.SetWriteDeadline(time.Time{}); err != nil {
-			// 	ws.ErrChan <- fmt.Errorf("clear write deadline: %w", err)
-			// 	continue
-			// }
+			if err := ws.socket.SetWriteDeadline(time.Time{}); err != nil {
+				ws.ErrChan <- fmt.Errorf("clear write deadline: %w", err)
+				continue
+			}
 
-			// if err := ws.socket.SetReadDeadline(time.Now().Add(READ_TIMEOUT)); err != nil {
-			// 	ws.ErrChan <- fmt.Errorf("set read deadline: %w", err)
-			// 	continue
-			// }
+			if err := ws.socket.SetReadDeadline(time.Now().Add(READ_TIMEOUT)); err != nil {
+				ws.ErrChan <- fmt.Errorf("set read deadline: %w", err)
+				continue
+			}
 
 			resp, err := ws.receive()
 			if err != nil {
@@ -59,11 +56,11 @@ func (ws *WSClient) handleConnLoop() {
 				continue
 			}
 
-			// if err := ws.socket.SetReadDeadline(time.Time{}); err != nil {
-			// 	ws.ErrChan <- fmt.Errorf("clear read deadline: %w", err)
-			// 	continue
-			// }
-			ws.ReceiveMsgChan <- resp
+			if err := ws.socket.SetReadDeadline(time.Time{}); err != nil {
+				ws.ErrChan <- fmt.Errorf("clear read deadline: %w", err)
+				continue
+			}
+			ws.ReceiveMsgChan <- *resp
 		case <-timer.C:
 			ws.ErrChan <- errors.New("Connection timeout")
 			return
@@ -72,49 +69,51 @@ func (ws *WSClient) handleConnLoop() {
 }
 
 func (ws *WSClient) handleErrLoop() {
-	defer fmt.Println("handleErrLoop ended")
 	defer ws.wg.Done()
-	fmt.Println("handleErrLoop started")
 	for {
 		if ws.reconn.Load() {
 			continue
 		}
 		select {
 		case err := <-ws.ErrChan:
-			fmt.Println(err)
-
+			log.Printf("Error: %v", err)
 			switch {
 			case websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure):
-				fmt.Println("Unexpected closure, attempting to reconnect")
 				if reconnErr := ws.reconnecting(); reconnErr != nil {
-					fmt.Println("Reconnection failed:", reconnErr)
+					errResp := errResp
+					errResp.Err[0].Message = err.Error()
+					ws.ReceiveMsgChan <- errResp
 					go ws.Close()
 					return
 				}
 
 			case err.Error() == "Connection timeout":
+				errResp := errResp
+				errResp.Err[0].Message = err.Error()
+				ws.ReceiveMsgChan <- errResp
 				go ws.Close()
 				return
 
 			case errors.Is(err, net.ErrClosed):
-				fmt.Println("Connection already closed")
 				return
 			default:
 				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
-					fmt.Println("Network timeout, attempting to reconnect")
 					if reconnErr := ws.reconnecting(); reconnErr != nil {
-						fmt.Println("Reconnection failed:", reconnErr)
+						errResp := errResp
+						errResp.Err[0].Message = err.Error()
+						ws.ReceiveMsgChan <- errResp
 						go ws.Close()
 						return
 					}
 				} else {
-					fmt.Println("Unhandled error, closing connection")
+					errResp := errResp
+					errResp.Err[0].Message = err.Error()
+					ws.ReceiveMsgChan <- errResp
 					go ws.Close()
 					return
 				}
 			}
 		case <-ws.Done:
-			fmt.Println("Done signal received, exiting handleErrLoop")
 			return
 		}
 
@@ -124,6 +123,7 @@ func (ws *WSClient) handleErrLoop() {
 func (ws *WSClient) send(msg ReqMessage) error {
 	ws.socketMutex.Lock()
 	defer ws.socketMutex.Unlock()
+
 	if ws.socket == nil {
 		return errors.New("socket is nil")
 	}
@@ -131,13 +131,12 @@ func (ws *WSClient) send(msg ReqMessage) error {
 	reqData := []ReqMessage{msg}
 
 	if err := ws.socket.WriteJSON(reqData); err != nil {
-		fmt.Println(err)
 		return err
 	}
 	return nil
 }
 
-func (ws *WSClient) receive() ([]RespData, error) {
+func (ws *WSClient) receive() (*RespMessage, error) {
 	ws.socketMutex.Lock()
 	defer ws.socketMutex.Unlock()
 
@@ -153,11 +152,10 @@ func (ws *WSClient) receive() ([]RespData, error) {
 	if err := json.Unmarshal(resp, response); err != nil {
 		return nil, err
 	}
-	fmt.Println("response: ", response)
 	if len(response.Err) > 0 {
 		return nil, fmt.Errorf("error response: %s", response.Err[0].Message)
 	}
-	return response.Data, nil
+	return response, nil
 }
 
 func (ws *WSClient) authentication() error {
@@ -171,7 +169,6 @@ func (ws *WSClient) authentication() error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal auth request: %w", err)
 	}
-	fmt.Println(string(jsonStr))
 
 	err = ws.socket.WriteMessage(websocket.TextMessage, jsonStr)
 	if err != nil {
@@ -192,19 +189,17 @@ func (ws *WSClient) authentication() error {
 		return errors.New("empty data in auth response")
 	}
 	ws.User.UUID = response.Data[0].ConnectionSessionUUID
+	log.Printf("UserID: %d authenticated with UUID:%s", ws.User.ID, ws.User.UUID)
 	return nil
 }
 
-func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) ([]RespData, error) {
-	fmt.Println("sending...")
+func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) (RespMessage, error) {
 	if ws.socket == nil || ws.SendMsgChan == nil {
-		fmt.Println("First msg")
 		if err := ws.Start(); err != nil {
 			go ws.Close()
-			return nil, fmt.Errorf("failed to start connection: %w", err)
+			return emptyResp, fmt.Errorf("failed to start connection: %w", err)
 		}
 	}
-	fmt.Println(ws.socket != nil)
 
 	ws.SendMsgChan <- msg
 
@@ -215,6 +210,6 @@ func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) ([]RespData, error) {
 	case resp := <-ws.ReceiveMsgChan:
 		return resp, nil
 	case <-timeout.C:
-		return nil, errors.New("timeout waiting for response")
+		return emptyResp, errors.New("timeout waiting for response")
 	}
 }

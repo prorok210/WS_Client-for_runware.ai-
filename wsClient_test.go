@@ -37,7 +37,6 @@ func TestWSClientSendMsg(t *testing.T) {
 	go func() {
 		fmt.Println("Start testing")
 		for i, reqMsg := range data {
-			fmt.Println("Sending resp")
 			resp, err := wsClient.SendAndReceiveMsg(reqMsg)
 			if err != nil {
 				fmt.Println("err connectin", err)
