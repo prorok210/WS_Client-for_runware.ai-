@@ -67,5 +67,10 @@ type WSClient struct {
 
 var (
 	errResp   = RespMessage{Data: []RespData{}, Err: []RespError{{Code: "500", Message: "Internal server error"}}}
-	emptyResp = RespMessage{Data: []RespData{}, Err: []RespError{}}
+	emptyResp = []RespMessage{
+		{
+			Data: []RespData{},  // Пустой слайс
+			Err:  []RespError{}, // Пустой слайс
+		},
+	}
 )

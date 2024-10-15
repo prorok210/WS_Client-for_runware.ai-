@@ -11,7 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func (ws *WSClient) handleConnLoop() {
+func (ws *WSClient) handleConnLoop(numberResults int) {
 	defer ws.wg.Done()
 
 	timer := time.NewTimer(CONNECTION_TIMEOUT)
@@ -50,7 +50,7 @@ func (ws *WSClient) handleConnLoop() {
 				continue
 			}
 
-			resp, err := ws.receive()
+			resp, err := ws.receive(numberResults)
 			if err != nil {
 				ws.errChan <- fmt.Errorf("receive error: %w", err)
 				continue
@@ -60,7 +60,9 @@ func (ws *WSClient) handleConnLoop() {
 				ws.errChan <- fmt.Errorf("clear read deadline: %w", err)
 				continue
 			}
-			ws.receiveMsgChan <- *resp
+			for _, r := range resp {
+				ws.receiveMsgChan <- *r
+			}
 		case <-timer.C:
 			ws.errChan <- errors.New("Connection timeout")
 			return
@@ -68,7 +70,7 @@ func (ws *WSClient) handleConnLoop() {
 	}
 }
 
-func (ws *WSClient) handleErrLoop() {
+func (ws *WSClient) handleErrLoop(numberResults int) {
 	defer ws.wg.Done()
 	for {
 		if ws.reconn.Load() {
@@ -79,7 +81,7 @@ func (ws *WSClient) handleErrLoop() {
 			log.Printf("Error: %v", err)
 			switch {
 			case websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure):
-				if reconnErr := ws.reconnecting(); reconnErr != nil {
+				if reconnErr := ws.reconnecting(numberResults); reconnErr != nil {
 					errResp := errResp
 					errResp.Err[0].Message = err.Error()
 					ws.receiveMsgChan <- errResp
@@ -98,7 +100,7 @@ func (ws *WSClient) handleErrLoop() {
 				return
 			default:
 				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
-					if reconnErr := ws.reconnecting(); reconnErr != nil {
+					if reconnErr := ws.reconnecting(numberResults); reconnErr != nil {
 						errResp := errResp
 						errResp.Err[0].Message = err.Error()
 						ws.receiveMsgChan <- errResp
@@ -136,7 +138,7 @@ func (ws *WSClient) send(msg ReqMessage) error {
 	return nil
 }
 
-func (ws *WSClient) receive() (*RespMessage, error) {
+func (ws *WSClient) receive(numberResults int) ([]*RespMessage, error) {
 	ws.socketMutex.Lock()
 	defer ws.socketMutex.Unlock()
 
@@ -144,18 +146,23 @@ func (ws *WSClient) receive() (*RespMessage, error) {
 		return nil, errors.New("socket is nil")
 	}
 
-	_, resp, err := ws.socket.ReadMessage()
-	if err != nil {
-		return nil, err
+	var responseData = []*RespMessage{}
+
+	for i := 0; i < numberResults; i++ {
+		_, resp, err := ws.socket.ReadMessage()
+		if err != nil {
+			return nil, err
+		}
+		response := new(RespMessage)
+		if err := json.Unmarshal(resp, response); err != nil {
+			return nil, err
+		}
+		if len(response.Err) > 0 {
+			return nil, fmt.Errorf("error response: %s", response.Err[0].Message)
+		}
+		responseData = append(responseData, response)
 	}
-	response := new(RespMessage)
-	if err := json.Unmarshal(resp, response); err != nil {
-		return nil, err
-	}
-	if len(response.Err) > 0 {
-		return nil, fmt.Errorf("error response: %s", response.Err[0].Message)
-	}
-	return response, nil
+	return responseData, nil
 }
 
 func (ws *WSClient) authentication() error {
@@ -193,23 +200,33 @@ func (ws *WSClient) authentication() error {
 	return nil
 }
 
-func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) (RespMessage, error) {
+func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) ([]RespMessage, error) {
+	var result []RespMessage
 	if ws.socket == nil || ws.sendMsgChan == nil {
-		if err := ws.Start(); err != nil {
+		if err := ws.Start(msg.NumberResults); err != nil {
 			go ws.Close()
 			return emptyResp, fmt.Errorf("failed to start connection: %w", err)
 		}
 	}
 
 	ws.sendMsgChan <- msg
-
 	timeout := time.NewTimer(READ_TIMEOUT + WRITE_TIMEOUT)
 	defer timeout.Stop()
+	for i := 0; i < msg.NumberResults; i++ {
+		select {
+		case resp := <-ws.receiveMsgChan:
+			if !timeout.Stop() {
+				select {
+				case <-timeout.C:
+				default:
+				}
+			}
+			result = append(result, resp)
+			timeout.Reset(READ_TIMEOUT + WRITE_TIMEOUT)
 
-	select {
-	case resp := <-ws.receiveMsgChan:
-		return resp, nil
-	case <-timeout.C:
-		return emptyResp, errors.New("timeout waiting for response")
+		case <-timeout.C:
+			return emptyResp, errors.New("timeout waiting for response")
+		}
 	}
+	return result, nil
 }
