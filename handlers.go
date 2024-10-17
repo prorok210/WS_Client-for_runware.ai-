@@ -64,7 +64,7 @@ func (ws *WSClient) handleConnLoop() {
 			}
 			// Очищаем канал от старых сообщений, если они там есть, но при этом состояние показывало, что в канале нет данных
 			// fmt.Println("undo")
-			if !ws.dataInChannel.Load() {
+			if !ws.DataInChannel.Load() {
 				func() {
 					for {
 						select {
@@ -88,7 +88,7 @@ func (ws *WSClient) handleConnLoop() {
 			// 	}
 
 			// }
-			ws.dataInChannel.Store(true)
+			ws.DataInChannel.Store(true)
 			for _, r := range resp {
 				ws.receiveMsgChan <- *r
 			}
