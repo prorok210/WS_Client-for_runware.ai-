@@ -50,33 +50,33 @@ func (ws *WSClient) handleConnLoop() {
 				continue
 			}
 			numberResults := req.NumberResults
-			fmt.Println("Number of results", numberResults)
+			// fmt.Println("Number of results", numberResults)
 			resp, err := ws.receive(numberResults)
 			if err != nil {
 				ws.errChan <- fmt.Errorf("receive error: %w", err)
 				continue
 			}
-			fmt.Println("Received response", resp)
+			// fmt.Println("Received response", resp)
 
 			if err := ws.socket.SetReadDeadline(time.Time{}); err != nil {
 				ws.errChan <- fmt.Errorf("clear read deadline: %w", err)
 				continue
 			}
 			// Очищаем канал от старых сообщений, если они там есть, но при этом состояние показывало, что в канале нет данных
-			fmt.Println("undo")
+			// fmt.Println("undo")
 			if !ws.dataInChannel.Load() {
 				func() {
 					for {
 						select {
 						case <-ws.receiveMsgChan:
 						default:
-							fmt.Println("default")
+							// fmt.Println("default")
 							return
 						}
 					}
 				}()
 			}
-			fmt.Println("redo")
+			// fmt.Println("redo")
 			// select {
 			// case <-timer.C:
 			// 	ws.errChan <- errors.New("Connection timeout")
@@ -179,7 +179,7 @@ func (ws *WSClient) receive(numberResults int) ([]*RespMessage, error) {
 	var responseData = []*RespMessage{}
 
 	for i := 0; i < numberResults; i++ {
-		fmt.Println("READING MESSAGE")
+		// fmt.Println("READING MESSAGE")
 		_, resp, err := ws.socket.ReadMessage()
 		if err != nil {
 			return nil, fmt.Errorf("error response: %s", err)
@@ -239,7 +239,7 @@ func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) ([]RespMessage, error) {
 			return emptyResp, fmt.Errorf("failed to start connection: %w", err)
 		}
 	}
-	fmt.Println("REQ MSG", msg)
+	// fmt.Println("REQ MSG", msg)
 	ws.sendMsgChan <- msg
 	timeout := time.NewTimer(READ_TIMEOUT + WRITE_TIMEOUT)
 	defer timeout.Stop()
