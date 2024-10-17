@@ -17,11 +17,11 @@ const (
 	URL                   = "wss://ws-api.runware.ai/v1"
 	SEND_CHAN_MAX_SIZE    = 128
 	RECEIVE_CHAN_MAX_SIZE = 128
-	CONNECTION_TIMEOUT    = 120 * time.Second
+	CONNECTION_TIMEOUT    = 60 * time.Second
 	RECONNECTED_DELAY     = 1 * time.Second
 	MAX_RETRIES           = 3
-	WRITE_TIMEOUT         = 20 * time.Second
-	READ_TIMEOUT          = 80 * time.Second
+	WRITE_TIMEOUT         = 10 * time.Second
+	READ_TIMEOUT          = 30 * time.Second
 )
 
 func CreateWsClient(apiKey string, userID uint) *WSClient {
@@ -37,13 +37,13 @@ func CreateWsClient(apiKey string, userID uint) *WSClient {
 	}
 }
 
-func (ws *WSClient) Start(numberResults int) error {
+func (ws *WSClient) Start() error {
 	if ws.socket == nil {
-		if err := ws.connect(numberResults); err != nil {
+		if err := ws.connect(); err != nil {
 			return err
 		}
 	} else {
-		if err := ws.reconnecting(numberResults); err != nil {
+		if err := ws.reconnecting(); err != nil {
 			return err
 		}
 	}
@@ -51,7 +51,7 @@ func (ws *WSClient) Start(numberResults int) error {
 	return nil
 }
 
-func (ws *WSClient) connect(numberResults int) error {
+func (ws *WSClient) connect() error {
 	socket, _, err := websocket.DefaultDialer.Dial(ws.url, nil)
 	if err != nil {
 		return fmt.Errorf("dial error: %w", err)
@@ -70,13 +70,13 @@ func (ws *WSClient) connect(numberResults int) error {
 	ws.Done = make(chan struct{})
 
 	ws.wg.Add(2)
-	go ws.handleConnLoop(numberResults)
-	go ws.handleErrLoop(numberResults)
+	go ws.handleConnLoop()
+	go ws.handleErrLoop()
 
 	return nil
 }
 
-func (ws *WSClient) reconnecting(numberResults int) error {
+func (ws *WSClient) reconnecting() error {
 	if !ws.reconn.CompareAndSwap(false, true) {
 		return errors.New("reconnection already in progress")
 	}
@@ -90,7 +90,7 @@ func (ws *WSClient) reconnecting(numberResults int) error {
 		if retryCount >= MAX_RETRIES {
 			return errors.New("max retries reached")
 		}
-		err := ws.connect(numberResults)
+		err := ws.connect()
 		if err == nil {
 			log.Println("reconnect successful")
 			return nil

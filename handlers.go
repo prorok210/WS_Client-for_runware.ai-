@@ -11,7 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func (ws *WSClient) handleConnLoop(numberResults int) {
+func (ws *WSClient) handleConnLoop() {
 	defer ws.wg.Done()
 
 	timer := time.NewTimer(CONNECTION_TIMEOUT)
@@ -49,17 +49,46 @@ func (ws *WSClient) handleConnLoop(numberResults int) {
 				ws.errChan <- fmt.Errorf("set read deadline: %w", err)
 				continue
 			}
-
+			numberResults := req.NumberResults
+			fmt.Println("Number of results", numberResults)
 			resp, err := ws.receive(numberResults)
 			if err != nil {
 				ws.errChan <- fmt.Errorf("receive error: %w", err)
 				continue
 			}
+			fmt.Println("Received response", resp)
 
 			if err := ws.socket.SetReadDeadline(time.Time{}); err != nil {
 				ws.errChan <- fmt.Errorf("clear read deadline: %w", err)
 				continue
 			}
+			// Очищаем канал от старых сообщений, если они там есть, но при этом состояние показывало, что в канале нет данных
+			fmt.Println("undo")
+			if !ws.dataInChannel.Load() {
+				func() {
+					for {
+						select {
+						case <-ws.receiveMsgChan:
+						default:
+							fmt.Println("default")
+							return
+						}
+					}
+				}()
+			}
+			fmt.Println("redo")
+			// select {
+			// case <-timer.C:
+			// 	ws.errChan <- errors.New("Connection timeout")
+			// 	return
+			// default:
+			// 	ws.dataInChannel.Store(true)
+			// 	for _, r := range resp {
+			// 		ws.receiveMsgChan <- *r
+			// 	}
+
+			// }
+			ws.dataInChannel.Store(true)
 			for _, r := range resp {
 				ws.receiveMsgChan <- *r
 			}
@@ -67,10 +96,11 @@ func (ws *WSClient) handleConnLoop(numberResults int) {
 			ws.errChan <- errors.New("Connection timeout")
 			return
 		}
+
 	}
 }
 
-func (ws *WSClient) handleErrLoop(numberResults int) {
+func (ws *WSClient) handleErrLoop() {
 	defer ws.wg.Done()
 	for {
 		if ws.reconn.Load() {
@@ -81,7 +111,7 @@ func (ws *WSClient) handleErrLoop(numberResults int) {
 			log.Printf("Error: %v", err)
 			switch {
 			case websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure):
-				if reconnErr := ws.reconnecting(numberResults); reconnErr != nil {
+				if reconnErr := ws.reconnecting(); reconnErr != nil {
 					errResp := errResp
 					errResp.Err[0].Message = err.Error()
 					ws.receiveMsgChan <- errResp
@@ -100,7 +130,7 @@ func (ws *WSClient) handleErrLoop(numberResults int) {
 				return
 			default:
 				if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
-					if reconnErr := ws.reconnecting(numberResults); reconnErr != nil {
+					if reconnErr := ws.reconnecting(); reconnErr != nil {
 						errResp := errResp
 						errResp.Err[0].Message = err.Error()
 						ws.receiveMsgChan <- errResp
@@ -149,13 +179,14 @@ func (ws *WSClient) receive(numberResults int) ([]*RespMessage, error) {
 	var responseData = []*RespMessage{}
 
 	for i := 0; i < numberResults; i++ {
+		fmt.Println("READING MESSAGE")
 		_, resp, err := ws.socket.ReadMessage()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error response: %s", err)
 		}
 		response := new(RespMessage)
 		if err := json.Unmarshal(resp, response); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error response: %s", err)
 		}
 		if len(response.Err) > 0 {
 			return nil, fmt.Errorf("error response: %s", response.Err[0].Message)
@@ -203,28 +234,23 @@ func (ws *WSClient) authentication() error {
 func (ws *WSClient) SendAndReceiveMsg(msg ReqMessage) ([]RespMessage, error) {
 	var result []RespMessage
 	if ws.socket == nil || ws.sendMsgChan == nil {
-		if err := ws.Start(msg.NumberResults); err != nil {
+		if err := ws.Start(); err != nil {
 			go ws.Close()
 			return emptyResp, fmt.Errorf("failed to start connection: %w", err)
 		}
 	}
-
+	fmt.Println("REQ MSG", msg)
 	ws.sendMsgChan <- msg
 	timeout := time.NewTimer(READ_TIMEOUT + WRITE_TIMEOUT)
 	defer timeout.Stop()
 	for i := 0; i < msg.NumberResults; i++ {
 		select {
 		case resp := <-ws.receiveMsgChan:
-			if !timeout.Stop() {
-				select {
-				case <-timeout.C:
-				default:
-				}
-			}
 			result = append(result, resp)
 			timeout.Reset(READ_TIMEOUT + WRITE_TIMEOUT)
 
 		case <-timeout.C:
+			// Если истек тайм-аут ожидания
 			return emptyResp, errors.New("timeout waiting for response")
 		}
 	}

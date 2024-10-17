@@ -63,6 +63,7 @@ type WSClient struct {
 	wg             sync.WaitGroup
 	socketMutex    sync.Mutex
 	reconn         atomic.Bool
+	dataInChannel  atomic.Bool
 }
 
 var (
